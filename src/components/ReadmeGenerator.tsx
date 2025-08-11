@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -162,13 +162,9 @@ export const ReadmeGenerator: React.FC = () => {
 
   const [includeTree, setIncludeTree] = useState(true);
   const [useAI, setUseAI] = useState(true);
-  const [ppxKey, setPpxKey] = useState("");
+  
   const [aiSections, setAiSections] = useState<{ description?: string; features?: string; installation?: string; usage?: string } | null>(null);
 
-  useEffect(() => {
-    const saved = localStorage.getItem("perplexity_api_key");
-    if (saved) setPpxKey(saved);
-  }, []);
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -213,45 +209,36 @@ export const ReadmeGenerator: React.FC = () => {
         }
       }
 
-      // Optional AI enhancement
+      // Optional AI enhancement via Supabase Edge Function (no key required from user)
       let ai: typeof aiSections = null;
       if (useAI) {
-        if (!ppxKey) {
-          toast({ title: "AI key required", description: "Enter your Perplexity API key to enable AI descriptions.", variant: "destructive" });
-        } else {
-          try {
-            localStorage.setItem("perplexity_api_key", ppxKey);
-            const deps = Object.keys({ ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) });
-            const langs = Object.entries(languages).sort((a, b) => b[1] - a[1]).map(([k]) => k);
-            const resp = await fetch("https://api.perplexity.ai/chat/completions", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${ppxKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: "llama-3.1-sonar-small-128k-online",
-                messages: [
-                  { role: "system", content: "Be precise and concise." },
-                  { role: "user", content: buildAiPrompt({ owner: parsed.owner, repo: parsed.repo, description: repo.description || pkg.description || "", languages: langs, dependencies: deps, scripts: pkg.scripts || {}, fileTree }) },
-                ],
-                temperature: 0.2,
-                top_p: 0.9,
-                max_tokens: 1000,
-              }),
-            });
-            if (resp.ok) {
-              const data = await resp.json();
-              const content: string = data?.choices?.[0]?.message?.content || "";
-              ai = extractAiSections(content);
-              setAiSections(ai);
-            } else {
-              const txt = await resp.text();
-              toast({ title: "AI request failed", description: txt.slice(0, 200), variant: "destructive" });
-            }
-          } catch (err: any) {
-            toast({ title: "AI error", description: err?.message || "Failed to contact AI", variant: "destructive" });
+        try {
+          const deps = Object.keys({ ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) });
+          const langs = Object.entries(languages).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+          const resp = await fetch("/functions/v1/generate-readme", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              owner: parsed.owner,
+              repo: parsed.repo,
+              description: repo.description || pkg.description || "",
+              languages: langs,
+              dependencies: deps,
+              scripts: pkg.scripts || {},
+              fileTree,
+            }),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            const sections = data?.sections || {};
+            ai = { description: sections.description, features: sections.features, installation: sections.installation, usage: sections.usage };
+            setAiSections(ai);
+          } else {
+            const txt = await resp.text();
+            toast({ title: "AI request failed", description: txt.slice(0, 200), variant: "destructive" });
           }
+        } catch (err: any) {
+          toast({ title: "AI error", description: err?.message || "Failed to contact AI", variant: "destructive" });
         }
       }
 
@@ -314,29 +301,15 @@ export const ReadmeGenerator: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex items-center justify-between rounded-md border p-3">
-              <Label htmlFor="include-tree" className="text-sm">Include Project Structure</Label>
+              <Label htmlFor="include-tree" className="text-sm">Include Folder Structure</Label>
               <Switch id="include-tree" checked={includeTree} onCheckedChange={setIncludeTree} />
             </div>
             <div className="flex items-center justify-between rounded-md border p-3">
-              <Label htmlFor="use-ai" className="text-sm">Enhance with AI</Label>
+              <Label htmlFor="use-ai" className="text-sm">Enhance with AI (uses Supabase Secret)</Label>
               <Switch id="use-ai" checked={useAI} onCheckedChange={setUseAI} />
             </div>
           </div>
 
-          {useAI && (
-            <div>
-              <Label htmlFor="ppx-key" className="text-sm">Perplexity API Key</Label>
-              <Input
-                id="ppx-key"
-                type="password"
-                placeholder="ppx-..."
-                value={ppxKey}
-                onChange={(e) => setPpxKey(e.target.value)}
-                aria-describedby="ppx-help"
-              />
-              <p id="ppx-help" className="mt-1 text-xs text-muted-foreground">Stored locally in your browser. Used to generate AI descriptions.</p>
-            </div>
-          )}
         </form>
       </Card>
 
@@ -372,15 +345,6 @@ function buildReadme(params: {
   const baseDescription = (info?.description || pkg?.description || "").trim();
   const license = info?.license?.spdx_id || info?.license?.name || "N/A";
 
-  const topLangs = Object.entries(languages)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([name]) => name);
-
-  const deps = Object.keys({ ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) });
-  const topDeps = deps.slice(0, 12);
-
-  const scripts = Object.entries(pkg?.scripts || {});
 
   const badges = [
     `[![License](https://img.shields.io/github/license/${owner}/${repo})](LICENSE)`,
@@ -390,16 +354,10 @@ function buildReadme(params: {
   ].join(" ");
 
   const toc = [
-    "- [About the Project](#about-the-project)",
-    fileTree ? "- [Project Structure](#project-structure)" : "",
-    "- [Tech Stack](#tech-stack)",
-    "- [Getting Started](#getting-started)",
-    "  - [Prerequisites](#prerequisites)",
-    "  - [Installation](#installation)",
-    "  - [Running Locally](#running-locally)",
-    scripts.length ? "- [Available Scripts](#available-scripts)" : "",
-    "- [Usage](#usage)",
+    "- [About](#about)",
     (ai?.features || topics.length) ? "- [Features](#features)" : "",
+    "- [Getting Started](#getting-started)",
+    fileTree ? "- [Folder Structure](#folder-structure)" : "",
     "- [Contributing](#contributing)",
     "- [License](#license)",
   ]
@@ -408,13 +366,9 @@ function buildReadme(params: {
 
   const features = ai?.features || (topics.length ? topics.map((t) => `- ${t}`).join("\n") : "- Feature 1\n- Feature 2\n- Feature 3");
 
-  const scriptsMd = scripts.length
-    ? scripts.map(([k, v]) => `- ${k}: \`${v}\``).join("\n")
-    : "";
-
   const homepageLine = info?.homepage ? `\n- Homepage: ${info.homepage}` : "";
 
-  const fence = "```"; // code fence helper to avoid backticks in template literal
+  const fence = "```"; // code fence helper
 
   const descriptionBlock = ai?.description
     ? `> ${ai.description.replace(/\n/g, "\n> ")}\n\n`
@@ -424,15 +378,12 @@ function buildReadme(params: {
     ? ai.installation + "\n\n"
     : `${fence}bash\n# Clone the repo\ngit clone https://github.com/${owner}/${repo}.git\ncd ${repoName}\n\n# Install dependencies\nnpm install\n${fence}\n\n`;
 
-  const usageBlock = ai?.usage
-    ? ai.usage + "\n\n"
-    : "Describe how to use the project here. Include examples and screenshots.\n\n";
-
   const structureBlock = fileTree
-    ? `## Project Structure\n\n${fence}text\n${fileTree}\n${fence}\n\n`
+    ? `## Folder Structure\n\n${fence}text\n${fileTree}\n${fence}\n\n`
     : "";
 
-  const md = `# ${repoName}\n\n${badges}\n\n${descriptionBlock}## About the Project\n\n- Repository: https://github.com/${owner}/${repo}${homepageLine}\n- Default branch: \`${info?.default_branch}\`\n\n## Table of Contents\n\n${toc}\n\n${structureBlock}## Tech Stack\n\n${topLangs.length ? `**Languages:** ${topLangs.join(", ")}` : ""}\n${topLangs.length && topDeps.length ? "\n" : ""}${topDeps.length ? `**Dependencies:** ${topDeps.join(", ")}` : ""}\n\n## Getting Started\n\n### Prerequisites\n\n- Node.js (recommended LTS)\n- npm or yarn or pnpm\n\n### Installation\n\n${installationBlock}### Running Locally\n\n${fence}bash\n# Start dev server\nnpm run dev\n\n# Build for production\nnpm run build\n${fence}\n\n${scriptsMd ? `## Available Scripts\n\n${scriptsMd}\n\n` : ""}## Usage\n\n${usageBlock}${(ai?.features || topics.length) ? `## Features\n\n${features}\n\n` : ""}## Contributing\n\nContributions are welcome! Please open an issue or submit a pull request.\n\n1. Fork the Project\n2. Create your Feature Branch (\`git checkout -b feature/AmazingFeature\`)\n3. Commit your Changes (\`git commit -m 'Add some AmazingFeature'\`)\n4. Push to the Branch (\`git push origin feature/AmazingFeature\`)\n5. Open a Pull Request\n\n## License\n\nDistributed under the ${license} License. See \`LICENSE\` for more information.\n\n---\n\n> Generated with a README generator.\n`;
+  const md = `# ${repoName}\n\n${badges}\n\n${descriptionBlock}## About\n\n- Repository: https://github.com/${owner}/${repo}${homepageLine}\n- Default branch: \`${info?.default_branch}\`\n\n## Table of Contents\n\n${toc}\n\n${(ai?.features || topics.length) ? `## Features\n\n${features}\n\n` : ""}## Getting Started\n\n### Prerequisites\n\n- Node.js (recommended LTS)\n- npm or yarn or pnpm\n\n### Installation\n\n${installationBlock}### Running Locally\n\n${fence}bash\n# Start dev server\nnpm run dev\n\n# Build for production\nnpm run build\n${fence}\n\n${structureBlock}## Contributing\n\nContributions are welcome! Please open an issue or submit a pull request.\n\n1. Fork the Project\n2. Create your Feature Branch (\`git checkout -b feature/AmazingFeature\`)\n3. Commit your Changes (\`git commit -m 'Add some AmazingFeature'\`)\n4. Push to the Branch (\`git push origin feature/AmazingFeature\`)\n5. Open a Pull Request\n\n## License\n\nDistributed under the ${license} License. See \`LICENSE\` for more information.\n\n---\n\n> Generated with a README generator.\n`;
 
   return md;
 }
+
