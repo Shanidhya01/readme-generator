@@ -1,73 +1,124 @@
-# Welcome to your Lovable project
+# README Generator
 
-## Project info
+Generate polished, structured READMEs from project details. Web UI built with Vite + React + TypeScript + Tailwind + shadcn/ui, with a Supabase Edge Function (Deno) that calls an LLM.
 
-**URL**: https://lovable.dev/projects/e92250d1-9c44-4ce6-9892-8bc666060a53
+## Stack
+- Vite + React + TypeScript
+- Tailwind CSS + shadcn/ui
+- Supabase Edge Functions (Deno)
+- OpenAI-compatible API
 
-## How can I edit this code?
+## Quickstart
 
-There are several ways of editing your application.
+Prereqs:
+- Node 18+ (recommended LTS)
+- npm (or pnpm/bun)
+- Supabase CLI (for the function): https://supabase.com/docs/guides/cli
 
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/e92250d1-9c44-4ce6-9892-8bc666060a53) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+Install and run the web app:
+```powershell
+# from repo root
+cd readme-generator
+npm install
 npm run dev
+# App runs at http://localhost:5173
 ```
 
-**Edit a file directly in GitHub**
+Run the Supabase function locally (so the UI can generate READMEs):
+```powershell
+# In another terminal, still inside readme-alchemist
+# Option A: use your .env file
+supabase functions serve generate-readme --env-file .env
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+# Option B: export the key for this session
+# PowerShell:
+$env:OPENAI_API_KEY = 'sk-...'
+supabase functions serve generate-readme
+# Function runs at http://127.0.0.1:54321/functions/v1/generate-readme
+```
 
-**Use GitHub Codespaces**
+If you want to run the entire Supabase stack locally:
+```powershell
+supabase start
+supabase functions serve generate-readme --no-verify-jwt --env-file .env
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## Environment variables
 
-## What technologies are used for this project?
+Create a .env file in the project root:
+```bash
+OPENAI_API_KEY=sk-REPLACE_ME
+# optional: other keys if you extend functionality
+# SUPABASE_URL=
+# SUPABASE_ANON_KEY=
+```
 
-This project is built with:
+Important:
+- Never commit real secrets. If a key was committed, rotate it immediately in your provider dashboard and remove the file from git history.
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+To untrack a committed .env:
+```powershell
+git rm --cached .env
+# ensure .env is listed in .gitignore
+git commit -m "chore: stop tracking .env"
+```
 
-## How can I deploy this project?
+## Development scripts
 
-Simply open [Lovable](https://lovable.dev/projects/e92250d1-9c44-4ce6-9892-8bc666060a53) and click on Share -> Publish.
+```bash
+npm run dev       # start Vite dev server
+npm run build     # production build
+npm run preview   # preview the built app
+```
 
-## Can I connect a custom domain to my Lovable project?
+## Project structure (high level)
 
-Yes, you can!
+```
+readme-generator/
+  src/
+    pages/Index.tsx          # main page
+    components/ReadmeGenerator.tsx
+    components/ui/*          # shadcn/ui components
+  supabase/functions/generate-readme/index.ts  # Deno function calling the LLM
+  vite.config.ts
+  tailwind.config.ts
+```
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+## How it works
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+- Frontend collects repo/app details (name, description, features, stack, usage).
+- Sends a request to the Supabase Edge Function at /functions/v1/generate-readme.
+- The function assembles a prompt and returns markdown.
+- The UI shows the generated README for copy or download.
+
+## Configure API endpoint (if needed)
+
+By default, serving the function locally exposes:
+- http://127.0.0.1:54321/functions/v1/generate-readme
+
+If you deploy the function, update your frontend call to the deployed URL, or add an env variable (e.g., VITE_FUNCTION_URL) and reference it in your fetch.
+
+## Deploy
+
+Supabase Edge Function:
+```bash
+# Login and link your project first
+supabase functions deploy generate-readme
+supabase secrets set --env-file .env
+```
+
+Static site (choose one):
+- Any static host (Netlify, Vercel, Azure Static Web Apps, etc.)
+- Build with `npm run build` and deploy `dist/`
+
+## Troubleshooting
+
+- “vite is not recognized”: run `npm install` in readme-alchemist, then `npm run dev`. Ensure Node 18+.
+- 500 on index.css: confirm Tailwind config and `src/index.css` imports:
+  - `@tailwind base; @tailwind components; @tailwind utilities;`
+  - `import './index.css'` in `src/main.tsx`
+- Function 404/timeout: make sure `supabase functions serve generate-readme` is running and the URL matches `http://127.0.0.1:54321/functions/v1/generate-readme`.
+
+## License
+
+MIT (update as desired)

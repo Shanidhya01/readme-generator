@@ -120,37 +120,71 @@ function formatFileTree(items: GitTreeItem[]): string {
   return render(root).slice(0, 300).join("\n");
 }
 
-function buildAiPrompt(input: { owner: string; repo: string; description: string; languages: string[]; dependencies: string[]; scripts: Record<string, string>; fileTree?: string }) {
-  const parts = [
-    `Write improved README sections for ${input.owner}/${input.repo}.`,
-    input.description ? `Project hint: ${input.description}` : "",
-    input.languages.length ? `Languages: ${input.languages.join(", ")}` : "",
-    input.dependencies.length ? `Dependencies: ${input.dependencies.join(", ")}` : "",
-    Object.keys(input.scripts || {}).length ? `Scripts: ${Object.keys(input.scripts).join(", ")}` : "",
-    input.fileTree ? `File tree:\n${input.fileTree}` : "",
-    "\nReturn markdown with exactly these H2 sections (##):",
-    "## Project Description",
-    "## Features",
-    "## Installation",
-    "## Usage",
-  ].filter(Boolean).join("\n");
-  return parts;
+// Helpers to enrich README
+function languagesSummary(langs: Record<string, number>): { lines: string; top: string[] } {
+  const total = Object.values(langs).reduce((a, b) => a + b, 0) || 0;
+  const entries = Object.entries(langs)
+    .map(([k, v]) => [k, total ? Math.round((v / total) * 1000) / 10 : 0] as const)
+    .sort((a, b) => b[1] - a[1]);
+  const lines = entries.slice(0, 8).map(([k, p]) => `- ${k}: ${p}%`).join("\n");
+  return { lines, top: entries.slice(0, 5).map(([k]) => k) };
 }
 
-function extractAiSections(markdown: string): { description?: string; features?: string; installation?: string; usage?: string } {
-  const sections = markdown.split(/\n(?=##\s+)/g);
-  const out: { [k: string]: string } = {};
-  for (const sec of sections) {
-    const m = sec.match(/^##\s+([^\n]+)\n([\s\S]*)$/);
-    if (!m) continue;
-    const title = m[1].trim().toLowerCase();
-    const content = m[2].trim();
-    if (title.startsWith("project description")) out.description = content;
-    else if (title.startsWith("features")) out.features = content;
-    else if (title.startsWith("installation")) out.installation = content;
-    else if (title.startsWith("usage")) out.usage = content;
-  }
-  return out;
+function guessPackageManager(paths: string[]): "npm" | "pnpm" | "yarn" | "bun" {
+  const lower = paths.map((p) => p.toLowerCase());
+  if (lower.some((p) => p.endsWith("pnpm-lock.yaml"))) return "pnpm";
+  if (lower.some((p) => p.endsWith("yarn.lock"))) return "yarn";
+  if (lower.some((p) => p.endsWith("bun.lockb"))) return "bun";
+  return "npm";
+}
+
+function guessTechFromDeps(allDeps: string[]): string[] {
+  const t = new Set<string>();
+  const has = (k: string | RegExp) => allDeps.some((d) => (typeof k === "string" ? d.includes(k) : k.test(d)));
+
+  if (has(/^react(-dom)?$/)) t.add("React");
+  if (has(/^next$/)) t.add("Next.js");
+  if (has(/^vite$/)) t.add("Vite");
+  if (has(/^typescript$/)) t.add("TypeScript");
+  if (has(/^tailwindcss$/)) t.add("Tailwind CSS");
+  if (has(/^@?redux/)) t.add("Redux");
+  if (has(/^zustand$/)) t.add("Zustand");
+  if (has(/^axios$/)) t.add("Axios");
+
+  if (has(/^express$/)) t.add("Express");
+  if (has(/^fastify$/)) t.add("Fastify");
+  if (has(/^koa$/)) t.add("Koa");
+  if (has(/^nest(@|js)?/)) t.add("NestJS");
+
+  if (has(/^prisma$/)) t.add("Prisma");
+  if (has(/^mongoose$/)) t.add("Mongoose");
+  if (has(/^drizzle-orm$/)) t.add("Drizzle");
+
+  if (has(/^vitest$/)) t.add("Vitest");
+  if (has(/^jest$/)) t.add("Jest");
+  if (has(/^playwright$/)) t.add("Playwright");
+  if (has(/^cypress$/)) t.add("Cypress");
+
+  if (has(/^eslint$/)) t.add("ESLint");
+  if (has(/^prettier$/)) t.add("Prettier");
+
+  return Array.from(t);
+}
+
+function scriptHint(name: string, cmd: string): string {
+  const n = name.toLowerCase();
+  if (n === "dev") return "Start development server";
+  if (n === "start") return "Start application";
+  if (n === "build") return "Build production assets";
+  if (n === "preview") return "Preview production build locally";
+  if (n === "test") return "Run tests";
+  if (n.startsWith("test:")) return `Run ${n.slice(5)} tests`;
+  if (n === "lint") return "Run linter";
+  if (n === "format") return "Format code";
+  if (n.includes("typecheck") || n === "tsc") return "Type check";
+  if (n.includes("deploy")) return "Deploy project";
+  if (n.includes("serve")) return "Serve app";
+  return cmd.length > 60 ? `${cmd.slice(0, 57)}...` : cmd;
 }
 
 export const ReadmeGenerator: React.FC = () => {
@@ -165,6 +199,8 @@ export const ReadmeGenerator: React.FC = () => {
   
   const [aiSections, setAiSections] = useState<{ description?: string; features?: string; installation?: string; usage?: string } | null>(null);
 
+  // New flags derived from repo tree
+  const [detect, setDetect] = useState<{ hasDocker: boolean; hasCI: boolean; hasEnvExample: boolean; paths: string[] }>({ hasDocker: false, hasCI: false, hasEnvExample: false, paths: [] });
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -202,12 +238,20 @@ export const ReadmeGenerator: React.FC = () => {
 
       // Optional file tree
       let fileTree = "";
+      let paths: string[] = [];
+      let hasDocker = false, hasCI = false, hasEnvExample = false;
       if (includeTree) {
         const treeResp = await fetchRepoTree(parsed.owner, parsed.repo, repo.default_branch);
         if (treeResp?.tree) {
+          paths = treeResp.tree.map((t) => t.path);
           fileTree = formatFileTree(treeResp.tree);
+          const lower = paths.map((p) => p.toLowerCase());
+          hasDocker = lower.some((p) => p.endsWith("dockerfile") || p.includes("/dockerfile"));
+          hasCI = lower.some((p) => p.startsWith(".github/workflows/"));
+          hasEnvExample = lower.some((p) => p.endsWith(".env") || p.endsWith(".env.example") || p.endsWith(".env.sample") || p.includes("env.example"));
         }
       }
+      setDetect({ hasDocker, hasCI, hasEnvExample, paths });
 
       // Optional AI enhancement via Supabase Edge Function (no key required from user)
       let ai: typeof aiSections = null;
@@ -242,7 +286,10 @@ export const ReadmeGenerator: React.FC = () => {
         }
       }
 
-      const md = buildReadme({ owner: parsed.owner, repo: parsed.repo, info: repo, languages, pkg, topics: topics?.names || [] }, { fileTree, ai });
+      const md = buildReadme(
+        { owner: parsed.owner, repo: parsed.repo, info: repo, languages, pkg, topics: topics?.names || [] },
+        { fileTree, ai, detect, pm: guessPackageManager(paths) }
+      );
       setReadme(md);
 
       toast({ title: "README generated", description: "You can copy or download it now." });
@@ -336,53 +383,131 @@ function buildReadme(params: {
   languages: Record<string, number>;
   pkg: PackageJson;
   topics: string[];
-}, extras?: { fileTree?: string; ai?: { description?: string; features?: string; installation?: string; usage?: string } | null }): string {
+}, extras?: {
+  fileTree?: string;
+  ai?: { description?: string; features?: string; installation?: string; usage?: string } | null;
+  detect?: { hasDocker: boolean; hasCI: boolean; hasEnvExample: boolean; paths: string[] };
+  pm?: "npm" | "pnpm" | "yarn" | "bun";
+}): string {
   const { owner, repo, info, languages, pkg, topics } = params;
   const fileTree = extras?.fileTree || "";
   const ai = extras?.ai || null;
+  const detect = extras?.detect || { hasDocker: false, hasCI: false, hasEnvExample: false, paths: [] };
+  const pm = extras?.pm || "npm";
 
   const repoName = info?.name || repo;
   const baseDescription = (info?.description || pkg?.description || "").trim();
   const license = info?.license?.spdx_id || info?.license?.name || "N/A";
 
+  const { lines: langLines, top: topLangs } = languagesSummary(languages);
+  const allDeps = Object.keys({ ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) });
+  const stack = guessTechFromDeps(allDeps);
 
-  const badges = [
+  const pmCmd = (script: string) => {
+    if (pm === "pnpm") return `pnpm ${script}`;
+    if (pm === "yarn") return script === "run dev" ? "yarn dev" : script.startsWith("run ") ? `yarn ${script.slice(4)}` : `yarn ${script}`;
+    if (pm === "bun") return `bun ${script.replace(/^run\s+/, "")}`;
+    return `npm ${script}`;
+  };
+
+  const badgesArr = [
     `[![License](https://img.shields.io/github/license/${owner}/${repo})](LICENSE)`,
     `[![Stars](https://img.shields.io/github/stars/${owner}/${repo}?style=flat)](https://github.com/${owner}/${repo}/stargazers)`,
     `[![Issues](https://img.shields.io/github/issues/${owner}/${repo})](https://github.com/${owner}/${repo}/issues)`,
     `[![Last Commit](https://img.shields.io/github/last-commit/${owner}/${repo})](https://github.com/${owner}/${repo}/commits)`,
-  ].join(" ");
+  ];
+  if (detect.hasCI) {
+    badgesArr.unshift(`[![CI](https://github.com/${owner}/${repo}/actions/workflows/ci.yml/badge.svg)](https://github.com/${owner}/${repo}/actions)`);
+  }
+  const badges = badgesArr.join(" ");
 
   const toc = [
     "- [About](#about)",
-    (ai?.features || topics.length) ? "- [Features](#features)" : "",
+    (ai?.features || topics.length || stack.length) ? "- [Features](#features)" : "",
+    stack.length ? "- [Tech Stack](#tech-stack)" : "",
+    topLangs.length ? "- [Languages](#languages)" : "",
     "- [Getting Started](#getting-started)",
+    "- [Scripts](#scripts)",
+    "- [Configuration](#configuration)",
+    ai?.usage ? "- [Usage](#usage)" : "",
+    detect.hasDocker ? "- [Docker](#docker)" : "",
     fileTree ? "- [Folder Structure](#folder-structure)" : "",
     "- [Contributing](#contributing)",
+    "- [Roadmap](#roadmap)",
+    "- [Security](#security)",
     "- [License](#license)",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    "- [Acknowledgements](#acknowledgements)",
+    "- [FAQ](#faq)",
+  ].filter(Boolean).join("\n");
 
-  const features = ai?.features || (topics.length ? topics.map((t) => `- ${t}`).join("\n") : "- Feature 1\n- Feature 2\n- Feature 3");
+  const features = ai?.features
+    || (topics.length ? topics.map((t) => `- ${t}`).join("\n") : "- Production-ready structure\n- DX-focused tooling\n- Extensible configuration");
 
   const homepageLine = info?.homepage ? `\n- Homepage: ${info.homepage}` : "";
 
-  const fence = "```"; // code fence helper
+  const fence = "```";
 
   const descriptionBlock = ai?.description
     ? `> ${ai.description.replace(/\n/g, "\n> ")}\n\n`
     : baseDescription ? "> " + baseDescription + "\n\n" : "";
 
+  // Scripts table
+  const scripts = pkg?.scripts || {};
+  const scriptRows = Object.entries(scripts).map(([name, cmd]) => `| ${name} | \`${cmd}\` | ${scriptHint(name, cmd)} |`).join("\n") || "| - | - | - |";
+
+  // Installation and run blocks
   const installationBlock = ai?.installation
     ? ai.installation + "\n\n"
-    : `${fence}bash\n# Clone the repo\ngit clone https://github.com/${owner}/${repo}.git\ncd ${repoName}\n\n# Install dependencies\nnpm install\n${fence}\n\n`;
+    : `${fence}bash\n# Clone the repo\ngit clone https://github.com/${owner}/${repo}.git\ncd ${repoName}\n\n# Install dependencies\n${pmCmd("install")}\n${fence}\n\n`;
+
+  const runBlock = `${fence}bash\n# Start dev server\n${pmCmd("run dev")}\n\n# Build for production\n${pmCmd("run build")}\n${fence}\n`;
+
+  const languagesBlock = topLangs.length
+    ? `## Languages\n\n${langLines || "- N/A"}\n\n`
+    : "";
+
+  const techStackBlock = stack.length
+    ? `## Tech Stack\n\n${stack.map((s) => `- ${s}`).join("\n")}\n\n`
+    : "";
+
+  const depsList = Object.entries(pkg?.dependencies || {}).map(([k, v]) => `- ${k} ${v}`).slice(0, 50).join("\n");
+  const devDepsList = Object.entries(pkg?.devDependencies || {}).map(([k, v]) => `- ${k} ${v}`).slice(0, 50).join("\n");
+
+  const configurationBlock = `## Configuration\n\n${
+    detect.hasEnvExample
+      ? "Copy the example environment file and adjust values as needed:\n\n" +
+        `${fence}bash\ncp .env.example .env\n${fence}\n\n`
+      : ""
+  }Common variables you may need (examples, edit for your project):\n\n` +
+    `${fence}env\nNODE_ENV=development\nPORT=3000\nAPI_BASE_URL=http://localhost:3000\n${fence}\n\n`;
+
+  const usageBlock = ai?.usage ? `## Usage\n\n${ai.usage}\n\n` : "";
+
+  const dockerBlock = detect.hasDocker
+    ? `## Docker\n\nBuild and run with Docker:\n\n${fence}bash\n# Build image\ndocker build -t ${repoName.toLowerCase().replace(/[^a-z0-9-]/g, "-")}:latest .\n\n# Run container\ndocker run -p 3000:3000 ${repoName.toLowerCase().replace(/[^a-z0-9-]/g, "-")}:latest\n${fence}\n\n`
+    : "";
 
   const structureBlock = fileTree
     ? `## Folder Structure\n\n${fence}text\n${fileTree}\n${fence}\n\n`
     : "";
 
-  const md = `# ${repoName}\n\n${badges}\n\n${descriptionBlock}## About\n\n- Repository: https://github.com/${owner}/${repo}${homepageLine}\n- Default branch: \`${info?.default_branch}\`\n\n## Table of Contents\n\n${toc}\n\n${(ai?.features || topics.length) ? `## Features\n\n${features}\n\n` : ""}## Getting Started\n\n### Prerequisites\n\n- Node.js (recommended LTS)\n- npm or yarn or pnpm\n\n### Installation\n\n${installationBlock}### Running Locally\n\n${fence}bash\n# Start dev server\nnpm run dev\n\n# Build for production\nnpm run build\n${fence}\n\n${structureBlock}## Contributing\n\nContributions are welcome! Please open an issue or submit a pull request.\n\n1. Fork the Project\n2. Create your Feature Branch (\`git checkout -b feature/AmazingFeature\`)\n3. Commit your Changes (\`git commit -m 'Add some AmazingFeature'\`)\n4. Push to the Branch (\`git push origin feature/AmazingFeature\`)\n5. Open a Pull Request\n\n## License\n\nDistributed under the ${license} License. See \`LICENSE\` for more information.\n\n---\n\n> Generated with a README generator.\n`;
+  const roadmapBlock = `## Roadmap\n\n- [ ] Add more generators\n- [ ] Improve prompts and templates\n- [ ] Add export formats (PDF/HTML)\n\n`;
+
+  const contributingBlock = `## Contributing\n\nContributions are welcome! Please open an issue or submit a pull request.\n\n1. Fork the Project\n2. Create your Feature Branch (\`git checkout -b feature/AmazingFeature\`)\n3. Commit your Changes (\`git commit -m 'Add some AmazingFeature'\`)\n4. Push to the Branch (\`git push origin feature/AmazingFeature\`)\n5. Open a Pull Request\n\n`;
+
+  const securityBlock = `## Security\n\nIf you discover a vulnerability, please open a private issue or contact the maintainers.\nNever commit real secrets. Rotate any exposed credentials immediately.\n\n`;
+
+  const acknowledgementsBlock = `## Acknowledgements\n\n- GitHub API\n- shadcn/ui\n- Tailwind CSS\n- Supabase Edge Functions\n\n`;
+
+  const faqBlock = `## FAQ\n\n- Why are some sections generic?\n  - The generator infers content from repository metadata. Add topics, scripts, and a .env.example to improve results.\n- How do I change package manager commands?\n  - The generator tries to detect lockfiles. Adjust commands if needed.\n\n`;
+
+  const md = `# ${repoName}\n\n${badges}\n\n${descriptionBlock}## About\n\n- Repository: https://github.com/${owner}/${repo}${homepageLine}\n- Default branch: \`${info?.default_branch}\`\n- License: \`${license}\`\n\n## Table of Contents\n\n${toc}\n\n${
+    (ai?.features || topics.length || stack.length) ? `## Features\n\n${features}\n\n` : ""
+  }${techStackBlock}${languagesBlock}## Getting Started\n\n### Prerequisites\n\n- Node.js (recommended LTS)${pkg?.engines?.node ? ` (project specifies ${pkg.engines.node})` : ""}\n- ${pm.toUpperCase()} (or adjust commands for your package manager)\n\n### Installation\n\n${installationBlock}### Running Locally\n\n${runBlock}## Scripts\n\n| Script | Command | Description |\n|---|---|---|\n${scriptRows}\n\n${
+    depsList ? `### Dependencies\n\n${depsList}\n\n` : ""
+  }${
+    devDepsList ? `### Dev Dependencies\n\n${devDepsList}\n\n` : ""
+  }${configurationBlock}${usageBlock}${dockerBlock}${structureBlock}${contributingBlock}${roadmapBlock}${securityBlock}## License\n\nDistributed under the ${license} License. See \`LICENSE\` for more information.\n\n${acknowledgementsBlock}${faqBlock}---\n\n> Generated with README Generator.\n`;
 
   return md;
 }
