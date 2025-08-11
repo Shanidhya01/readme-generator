@@ -17,23 +17,23 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { "content-type": "application/json" } });
     }
 
-    const apiKey = Deno.env.get("PERPLEXITY_API_KEY");
+    const apiKey = Deno.env.get("OPENAI_API_KEY");
     if (!apiKey) {
-      return new Response(JSON.stringify({ error: "Missing PERPLEXITY_API_KEY. Please add it to Supabase Edge Function secrets." }), { status: 500, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ error: "Missing OPENAI_API_KEY. Please add it to Supabase Edge Function secrets." }), { status: 500, headers: { "content-type": "application/json" } });
     }
 
     const body = (await req.json()) as Payload;
 
     const prompt = buildPrompt(body);
 
-    const resp = await fetch("https://api.perplexity.ai/chat/completions", {
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "llama-3.1-sonar-small-128k-online",
+        model: "gpt-4.1",
         messages: [
           { role: "system", content: "You are a helpful assistant that writes excellent README sections. Be precise and concise." },
           { role: "user", content: prompt },
@@ -46,7 +46,7 @@ serve(async (req) => {
 
     if (!resp.ok) {
       const text = await resp.text();
-      return new Response(JSON.stringify({ error: `Perplexity error ${resp.status}: ${text}` }), { status: 500, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ error: `OpenAI error ${resp.status}: ${text}` }), { status: 500, headers: { "content-type": "application/json" } });
     }
 
     const data = await resp.json();
