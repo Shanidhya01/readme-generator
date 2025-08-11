@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -6,6 +6,11 @@ import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+// highlight.js theme for code blocks
+import "highlight.js/styles/github-dark.min.css";
 
 interface RepoInfo {
   name: string;
@@ -201,6 +206,15 @@ export const ReadmeGenerator: React.FC = () => {
 
   // New flags derived from repo tree
   const [detect, setDetect] = useState<{ hasDocker: boolean; hasCI: boolean; hasEnvExample: boolean; paths: string[] }>({ hasDocker: false, hasCI: false, hasEnvExample: false, paths: [] });
+  const [showPreview, setShowPreview] = useState(false); // NEW
+
+  // Close preview on Esc
+  useEffect(() => {
+    if (!showPreview) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setShowPreview(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showPreview]);
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -322,6 +336,44 @@ export const ReadmeGenerator: React.FC = () => {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+    toast({ title: "Download started", description: "Saving README.md..." }); // NEW
+  };
+
+  // Reusable code block with copy button
+  const CodeBlock = ({ inline, className, children, ...props }: any) => {
+    const code = String(children ?? "").replace(/\n$/, "");
+    if (inline) {
+      return (
+        <code className="px-1.5 py-0.5 rounded bg-muted text-[0.9em]" {...props}>
+          {children}
+        </code>
+      );
+    }
+    const lang = /language-(\w+)/.exec(className || "")?.[1];
+    return (
+      <div className="relative group">
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(code);
+              toast({ title: "Copied", description: "Code block copied." });
+            } catch {
+              toast({ title: "Copy failed", variant: "destructive" });
+            }
+          }}
+          className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity text-xs rounded-md px-2 py-1 bg-secondary text-secondary-foreground border"
+          aria-label="Copy code"
+        >
+          Copy
+        </button>
+        <pre className="overflow-auto rounded-lg">
+          <code className={className || (lang ? `language-${lang}` : "")} {...props}>
+            {code}
+          </code>
+        </pre>
+      </div>
+    );
   };
 
   return (
@@ -366,11 +418,91 @@ export const ReadmeGenerator: React.FC = () => {
             <h2 className="text-lg font-semibold">Generated README.md</h2>
             <div className="flex gap-2">
               <Button variant="outline" onClick={handleCopy}>Copy</Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowPreview(true)
+                  toast({ title: "Preview", description: "Showing README preview." })
+                }}
+              >
+                Preview
+              </Button>
               <Button onClick={handleDownload}>Download</Button>
             </div>
           </div>
           <Textarea value={readme} onChange={(e) => setReadme(e.target.value)} className="min-h-[420px] font-mono" />
         </Card>
+      )}
+
+      {hasContent && showPreview && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60"
+          role="dialog"
+          aria-modal="true"
+          aria-label="README Preview"
+          onClick={() => {
+            setShowPreview(false)
+            toast({ title: "Preview closed" })
+          }}
+        >
+          {/* Full-screen preview surface */}
+          <div
+            className="relative w-screen h-screen bg-background text-foreground"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Sticky header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b bg-background/80 backdrop-blur px-4 py-3">
+              <h3 className="text-sm font-semibold">README Preview</h3>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(readme)
+                      toast({ title: "Copied", description: "Markdown copied to clipboard." })
+                    } catch {
+                      toast({ title: "Copy failed", variant: "destructive" })
+                    }
+                  }}
+                >
+                  Copy markdown
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setShowPreview(false)
+                    toast({ title: "Preview closed" })
+                  }}
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+
+            {/* Full height scroll area */}
+            <div className="h-[calc(100vh-56px)] overflow-y-auto">
+              <article className="prose prose-slate dark:prose-invert max-w-4xl mx-auto px-5 py-6">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeHighlight]}
+                  components={{
+                    code: CodeBlock,
+                    a: ({ node, ...props }) => (
+                      <a {...props} target="_blank" rel="noopener noreferrer" />
+                    ),
+                    table: ({ node, ...props }) => (
+                      <div className="overflow-x-auto">
+                        <table {...props} />
+                      </div>
+                    ),
+                  }}
+                >
+                  {readme}
+                </ReactMarkdown>
+              </article>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );
