@@ -352,7 +352,7 @@ export const ReadmeGenerator: React.FC = () => {
               <Switch id="include-tree" checked={includeTree} onCheckedChange={setIncludeTree} />
             </div>
             <div className="flex items-center justify-between rounded-md border p-3">
-              <Label htmlFor="use-ai" className="text-sm">Enhance with AI (uses Supabase Secret)</Label>
+              <Label htmlFor="use-ai" className="text-sm">Enhance with AI </Label>
               <Switch id="use-ai" checked={useAI} onCheckedChange={setUseAI} />
             </div>
           </div>

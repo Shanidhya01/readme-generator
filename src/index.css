@@ -35,7 +35,6 @@
 
     --radius: 0.75rem;
   }
-
   .dark {
     --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;
@@ -72,7 +71,7 @@
   body {
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "liga" 1, "calt" 1;
-    background-image:
+    background:
       radial-gradient(1200px 400px at 10% -10%, hsl(var(--accent) / 0.08), transparent 60%),
       radial-gradient(800px 300px at 90% -20%, hsl(var(--ring) / 0.07), transparent 60%);
     background-attachment: fixed;
@@ -85,14 +84,15 @@
   h1 { @apply text-3xl md:text-4xl; }
   h2 { @apply text-2xl md:text-3xl; }
   h3 { @apply text-xl md:text-2xl; }
-
   p { @apply leading-7 text-[15px] md:text-base; }
 
   a { @apply text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded-sm; }
 
   code { @apply px-1.5 py-0.5 rounded bg-muted text-sm; }
-  pre {
-    @apply bg-muted text-sm rounded-lg p-4 overflow-x-auto;
+  pre { @apply bg-muted text-sm rounded-lg p-4 overflow-x-auto; }
+
+  kbd {
+    @apply px-1.5 py-0.5 rounded border bg-secondary text-secondary-foreground text-xs shadow-sm;
   }
 }
 
@@ -106,18 +106,24 @@
   .glass { @apply bg-white/60 dark:bg-white/5 backdrop-blur-md border border-white/40 dark:border-white/10; }
 
   .btn-primary {
-    @apply inline-flex items-center gap-2 rounded-md bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-4 py-2 text-sm font-medium shadow transition-colors hover:from-purple-500 hover:to-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500;
+    @apply inline-flex items-center gap-2 rounded-md bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-4 py-2 text-sm font-medium shadow transition-colors
+           hover:from-purple-500 hover:to-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500;
   }
   .btn-secondary {
-    @apply inline-flex items-center gap-2 rounded-md bg-secondary text-secondary-foreground px-4 py-2 text-sm font-medium border transition-colors hover:bg-secondary/80 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary/40;
+    @apply inline-flex items-center gap-2 rounded-md bg-secondary text-secondary-foreground px-4 py-2 text-sm font-medium border transition-colors
+           hover:bg-secondary/80 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary/40;
   }
   .btn-ghost {
     @apply inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-foreground/80 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/30;
   }
 
   .input-like {
-    @apply bg-background text-foreground border border-input rounded-md px-3 py-2 outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/50;
+    @apply bg-background text-foreground border border-input rounded-md px-3 py-2 outline-none
+           focus:ring-2 focus:ring-primary/40 focus:border-primary/50;
   }
+
+  .surface { @apply bg-card text-card-foreground border rounded-lg; }
+  .surface-muted { @apply bg-muted text-muted-foreground rounded-lg; }
 }
 
 /* Utilities */
@@ -133,17 +139,27 @@
   }
 
   .fade-in { animation: fade-in 300ms ease-out both; }
-  .float { animation: float 6s ease-in-out infinite; }
+  .slide-up { animation: slide-up 220ms ease-out both; }
+  .pop { animation: pop 160ms ease-out both; }
   .hover-lift { transition: transform 180ms ease; }
   .hover-lift:hover { transform: translateY(-2px); }
-
   .glow { box-shadow: 0 0 0 2px hsl(var(--ring) / 0.12), 0 10px 30px -12px hsl(var(--ring) / 0.35); }
+
+  .skeleton { @apply rounded-md bg-muted relative overflow-hidden; }
+  .skeleton::after {
+    content: "";
+    @apply absolute inset-0 -translate-x-full;
+    background-image: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+    animation: shimmer 1.2s infinite;
+  }
 }
 
 @keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes slide-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pop { from { opacity: .6; transform: scale(.98); } to { opacity: 1; transform: scale(1); } }
+@keyframes shimmer { 100% { transform: translateX(100%); } }
 
-/* Respect reduced motion */
+/* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .fade-in, .float, .hover-lift { animation: none !important; transition: none !important; }
+  .fade-in, .slide-up, .pop, .hover-lift { animation: none !important; transition: none !important; }
 }
